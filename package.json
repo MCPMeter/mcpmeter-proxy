@@ -8,9 +8,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node index.js",
-    "dev":   "node --watch index.js",
-    "lint":  "echo 'no linter yet'"
+    "start":   "node index.js",
+    "dev":     "node --watch index.js",
+    "db:init": "mysql -h \"${DB_HOST:-127.0.0.1}\" -P \"${DB_PORT:-3306}\" -u \"${DB_USER}\" -p\"${DB_PASSWORD}\" \"${DB_NAME:-mcpmeter}\" < schema.sql",
+    "lint":    "echo 'no linter yet'"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

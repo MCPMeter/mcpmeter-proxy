@@ -33,11 +33,16 @@ That's the whole thing. ~600 lines of JavaScript.
 Requires Node ≥ 20, MySQL 8, and Redis 6.
 
 ```bash
-git clone https://github.com/mcpmeter/mcpmeter-proxy.git
+git clone https://github.com/MCPMeter/mcpmeter-proxy.git
 cd mcpmeter-proxy
-cp .env.example .env       # fill in DB + Redis creds
+cp .env.example .env                 # fill in DB + Redis creds
+
+# Bootstrap the schema (one-time):
+mysql -u root -e "CREATE DATABASE mcpmeter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+npm run db:init                      # loads schema.sql into $DB_NAME
+
 npm install
-npm start                  # dev: npm run dev
+npm start                            # dev: npm run dev
 ```
 
 Health check:
@@ -46,7 +51,21 @@ Health check:
 curl http://127.0.0.1:3010/health
 ```
 
-The proxy assumes a database with the schema used by the [mcpmeter platform](https://mcpmeter.com) — `users`, `api_keys`, `mcps`, `pricing_rules`, `usage_events`, `credit_transactions`. The mcpmeter Laravel app owns the migrations; this repo is the proxy only.
+### About the schema
+
+`schema.sql` is a snapshot of the canonical schema — the [mcpmeter Laravel app](https://mcpmeter.com) owns the migrations. We don't ship a Node migration tool here on purpose: two sources of truth would drift.
+
+When the upstream Laravel app changes the schema, regenerate the snapshot:
+
+```bash
+mysqldump --no-data --skip-comments --no-tablespaces \
+  -h "$DB_HOST" -u "$DB_USER" -p mcpmeter \
+  users api_keys projects mcps mcp_tools pricing_rules \
+  usage_events credit_transactions mcp_consumer_usage \
+  > schema.sql
+```
+
+The proxy only reads / writes columns documented in [`lib/db.js`](lib/db.js) — the rest of the Laravel-managed tables are irrelevant here.
 
 ---
 
