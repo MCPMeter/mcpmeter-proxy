@@ -1,0 +1,23 @@
+{
+  "name": "mcpmeter-proxy",
+  "version": "0.1.0",
+  "description": "MCP marketplace metering gateway. Authenticates, rate-limits, debits credit, forwards to upstream MCP servers.",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev":   "node --watch index.js",
+    "lint":  "echo 'no linter yet'"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "ioredis": "^5.4.1",
+    "mysql2": "^3.11.0",
+    "undici": "^6.19.8"
+  }
+}

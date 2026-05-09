@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Local env + secrets
+.env
+.env.local
+.env.*.local
+
+# Logs / runtime
+*.log
+npm-debug.log*
+pm2.log
+ecosystem.config.cjs
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
