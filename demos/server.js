@@ -10,18 +10,56 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 
-import * as echo       from './handlers/echo.js';
-import * as weather    from './handlers/weather.js';
-import * as currency   from './handlers/currency.js';
-import * as wikipedia  from './handlers/wikipedia.js';
-import * as github     from './handlers/github_public.js';
+import * as echo         from './handlers/echo.js';
+import * as weather      from './handlers/weather.js';
+import * as currency     from './handlers/currency.js';
+import * as wikipedia    from './handlers/wikipedia.js';
+import * as github       from './handlers/github_public.js';
+import * as dadjokes     from './handlers/dadjokes.js';
+import * as chuckNorris  from './handlers/chuck_norris.js';
+import * as catFacts     from './handlers/cat_facts.js';
+import * as dogImages    from './handlers/dog_images.js';
+import * as bored        from './handlers/bored.js';
+import * as dictionary   from './handlers/dictionary.js';
+import * as countries    from './handlers/countries.js';
+import * as ipInfo       from './handlers/ip_info.js';
+import * as timeHandler  from './handlers/time.js';
+import * as uuid         from './handlers/uuid.js';
+import * as crypto       from './handlers/crypto.js';
+import * as hackernews   from './handlers/hackernews.js';
+import * as xkcd         from './handlers/xkcd.js';
+import * as holidays     from './handlers/public_holidays.js';
+import * as trivia       from './handlers/trivia.js';
+import * as pokemon      from './handlers/pokemon.js';
+import * as starwars     from './handlers/starwars.js';
+import * as deck         from './handlers/deck_of_cards.js';
+import * as imageGen     from './handlers/image_gen.js';
 
 const handlers = {
-  'echo-test':     echo,
-  'weather':       weather,
-  'currency':      currency,
-  'wikipedia':     wikipedia,
-  'github-public': github,
+  'echo-test':       echo,
+  'weather':         weather,
+  'currency':        currency,
+  'wikipedia':       wikipedia,
+  'github-public':   github,
+  'dad-jokes':       dadjokes,
+  'chuck-norris':    chuckNorris,
+  'cat-facts':       catFacts,
+  'dog-images':      dogImages,
+  'bored':           bored,
+  'dictionary':      dictionary,
+  'countries':       countries,
+  'ip-info':         ipInfo,
+  'time':            timeHandler,
+  'uuid':            uuid,
+  'crypto':          crypto,
+  'hackernews':      hackernews,
+  'xkcd':            xkcd,
+  'public-holidays': holidays,
+  'trivia':          trivia,
+  'pokemon':         pokemon,
+  'starwars':        starwars,
+  'deck-of-cards':   deck,
+  'image-gen':       imageGen,
 };
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL || 'info' } });
@@ -63,7 +101,10 @@ fastify.post('/:slug/mcp', async (req, reply) => {
     const name = body.params?.name;
     const args = body.params?.arguments || {};
     try {
-      const result = await handler.call(name, args);
+      // Pass req as a third arg so handlers that need headers (e.g., echo's
+      // `headers` debug tool, or future handlers that forward upstream auth)
+      // can opt into reading it. Most handlers ignore it.
+      const result = await handler.call(name, args, req);
       return ok(id, result);
     } catch (err) {
       fastify.log.warn({ err: err.message, slug, name }, 'tool_failed');

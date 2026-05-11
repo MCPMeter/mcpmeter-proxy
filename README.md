@@ -16,15 +16,19 @@ We open-source it because **the meter should be inspectable, not just trusted**.
 
 For every request to `https://proxy.mcpmeter.com/<slug>`:
 
-1. **Authenticate.** SHA-256 the bearer, look it up in Redis (with MySQL fallback). Resolves to a project + monthly cap.
-2. **Resolve listing.** Slug &rarr; publisher's upstream URL, transport, free-tier allowance, rate limits.
-3. **Rate-limit.** Per-(MCP, consumer) sliding-window counters in Redis. Over &rarr; `429` with `Retry-After`.
-4. **Free tier.** If within the publisher's monthly free allowance, mark `FREE` and skip the debit.
-5. **Credit gate.** Atomic debit in MySQL. Insufficient balance &rarr; `402`.
-6. **Forward.** Stream the JSON-RPC body to the publisher's MCP. Supports HTTP / streamable HTTP / SSE.
-7. **Record.** One row per call to `usage_events`.
+1. **Authenticate.** SHA-256 the bearer, look it up in Redis (MySQL fallback). Accepts both `mcpm_live_*` API keys AND `mcpm_oauth_*` tokens issued via the OAuth 2.1 + DCR flow.
+2. **Resolve listing.** Slug → publisher's upstream URL, transport, free-tier allowance, rate limits, per-MCP timeout (default 60s, max 300s), publisher-configured upstream auth headers.
+3. **Rate-limit.** Per-(MCP, consumer) sliding-window counters in Redis. Over → `429` with `Retry-After`.
+4. **Per-tool pricing.** Resolve the price from `pricing_rules.tool_name = '<called tool>'` if a per-tool override exists, otherwise fall back to the listing default. Means a single MCP can charge $4/call on `start_video` and $0/call on `get_status`.
+5. **Free tier.** If within the publisher's monthly free allowance, mark `FREE` and skip the debit.
+6. **Credit gate.** Atomic debit in MySQL. Insufficient balance → `402`.
+7. **Forward.** Stream the JSON-RPC body to the publisher's MCP. Strips Authorization + Cookie + Content-Length, injects publisher's `upstream_headers`, unwraps consumer-provided `X-Forward-*` headers. Supports HTTP / streamable HTTP / SSE.
+8. **Refund-on-failure.** 5xx → automatic refund. JSON-RPC `error` body → automatic refund (with `X-Mcpmeter-Refunded: 1` receipt header).
+9. **Record.** One row per call to `usage_events`, including normalised client name (Claude Code, Cursor, Cline, …) classified from User-Agent.
 
-That's the whole thing. ~600 lines of JavaScript.
+When unauthenticated, the proxy returns RFC 6750 `WWW-Authenticate` with `resource_metadata=` pointing to `/.well-known/oauth-protected-resource` (RFC 9728), so MCP clients can auto-discover the OAuth flow.
+
+~700 lines of JavaScript.
 
 ---
 

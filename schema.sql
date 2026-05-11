@@ -3,41 +3,44 @@
 -- regenerate from the upstream mcpmeter app whenever a migration lands.
 --
 -- To bootstrap a local DB for the proxy:
---   mysql -u root -p -e "CREATE DATABASE mcpmeter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
---   mysql -u root -p mcpmeter < schema.sql
---
--- Tables (proxy reads/writes only the columns documented in lib/db.js):
---   users               · credit balance + auth ownership
---   api_keys            · SHA-256 hashed bearer keys
---   projects            · spend buckets with monthly caps
---   mcps                · listing config (slug, upstream, transport, limits)
---   mcp_tools           · auto-discovered tools per listing
---   pricing_rules       · per-call price (µ¢)
---   usage_events        · append-only call ledger
---   credit_transactions · append-only credit ledger
---   mcp_consumer_usage  · per-(MCP, consumer, month) free-tier counters
 
-SET FOREIGN_KEY_CHECKS = 0;
 
 CREATE TABLE `users` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `handle` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `role` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'consumer',
   `email_verified_at` timestamp NULL DEFAULT NULL,
   `password` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `remember_token` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `stripe_customer_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `stripe_connect_account_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `stripe_connect_payouts_enabled` tinyint(1) NOT NULL DEFAULT '0',
+  `stripe_connect_details_submitted` tinyint(1) NOT NULL DEFAULT '0',
   `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `credit_micro_cents` bigint NOT NULL DEFAULT '0',
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_email_unique` (`email`),
+  UNIQUE KEY `users_handle_unique` (`handle`),
   KEY `users_stripe_customer_id_index` (`stripe_customer_id`),
   KEY `users_stripe_connect_account_id_index` (`stripe_connect_account_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `projects` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` bigint unsigned NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `slug` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `spending_cap_cents_per_month` bigint unsigned DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `projects_slug_unique` (`slug`),
+  KEY `projects_user_id_index` (`user_id`),
+  CONSTRAINT `projects_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `api_keys` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint unsigned NOT NULL,
@@ -58,20 +61,7 @@ CREATE TABLE `api_keys` (
   KEY `api_keys_revoked_at_index` (`revoked_at`),
   CONSTRAINT `api_keys_project_id_foreign` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`) ON DELETE CASCADE,
   CONSTRAINT `api_keys_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE TABLE `projects` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `user_id` bigint unsigned NOT NULL,
-  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `slug` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `spending_cap_cents_per_month` bigint unsigned DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT NULL,
-  `updated_at` timestamp NULL DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `projects_slug_unique` (`slug`),
-  KEY `projects_user_id_index` (`user_id`),
-  CONSTRAINT `projects_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `mcps` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `publisher_id` bigint unsigned NOT NULL,
@@ -82,7 +72,13 @@ CREATE TABLE `mcps` (
   `readme_md` longtext COLLATE utf8mb4_unicode_ci,
   `repo_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `homepage_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `upstream_url` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `logo_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `logo_emoji` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `upvotes_count` int unsigned NOT NULL DEFAULT '0',
+  `cover_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sample_prompts` json DEFAULT NULL,
+  `upstream_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `upstream_headers` text COLLATE utf8mb4_unicode_ci,
   `transport` enum('http','sse','streamable') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'streamable',
   `status` enum('draft','review','live','paused','archived') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `last_seen_at` timestamp NULL DEFAULT NULL,
@@ -92,6 +88,7 @@ CREATE TABLE `mcps` (
   `free_calls_per_consumer` smallint unsigned NOT NULL DEFAULT '0',
   `rate_limit_per_minute` int unsigned DEFAULT NULL,
   `rate_limit_per_day` int unsigned DEFAULT NULL,
+  `upstream_timeout_seconds` smallint unsigned DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -100,7 +97,7 @@ CREATE TABLE `mcps` (
   KEY `mcps_category_index` (`category`),
   KEY `mcps_status_index` (`status`),
   CONSTRAINT `mcps_publisher_id_foreign` FOREIGN KEY (`publisher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `mcp_tools` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `mcp_id` bigint unsigned NOT NULL,
@@ -113,7 +110,7 @@ CREATE TABLE `mcp_tools` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `mcp_tools_mcp_id_name_unique` (`mcp_id`,`name`),
   CONSTRAINT `mcp_tools_mcp_id_foreign` FOREIGN KEY (`mcp_id`) REFERENCES `mcps` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=20 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `pricing_rules` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `mcp_id` bigint unsigned NOT NULL,
@@ -127,13 +124,15 @@ CREATE TABLE `pricing_rules` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `pricing_rules_mcp_id_tool_name_unique` (`mcp_id`,`tool_name`),
   CONSTRAINT `pricing_rules_mcp_id_foreign` FOREIGN KEY (`mcp_id`) REFERENCES `mcps` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `usage_events` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `project_id` bigint unsigned NOT NULL,
   `mcp_id` bigint unsigned NOT NULL,
   `api_key_id` bigint unsigned DEFAULT NULL,
   `tool_name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `client` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_agent` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `called_at` timestamp NOT NULL,
   `duration_ms` int unsigned NOT NULL,
   `status` smallint unsigned NOT NULL,
@@ -150,8 +149,9 @@ CREATE TABLE `usage_events` (
   KEY `usage_events_project_id_index` (`project_id`),
   KEY `usage_events_mcp_id_index` (`mcp_id`),
   KEY `usage_events_called_at_index` (`called_at`),
-  KEY `usage_events_aggregated_at_index` (`aggregated_at`)
-) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  KEY `usage_events_aggregated_at_index` (`aggregated_at`),
+  KEY `idx_usage_events_mcp_client` (`mcp_id`,`client`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `credit_transactions` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint unsigned NOT NULL,
@@ -169,7 +169,7 @@ CREATE TABLE `credit_transactions` (
   KEY `credit_transactions_reference_type_reference_id_index` (`reference_type`,`reference_id`),
   KEY `credit_transactions_type_index` (`type`),
   CONSTRAINT `credit_transactions_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `mcp_consumer_usage` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `mcp_id` bigint unsigned NOT NULL,
@@ -187,6 +187,76 @@ CREATE TABLE `mcp_consumer_usage` (
   KEY `mcp_consumer_usage_mcp_id_period_year_month_index` (`mcp_id`,`period_year_month`),
   CONSTRAINT `mcp_consumer_usage_mcp_id_foreign` FOREIGN KEY (`mcp_id`) REFERENCES `mcps` (`id`) ON DELETE CASCADE,
   CONSTRAINT `mcp_consumer_usage_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `oauth_clients` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `client_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `client_secret_hash` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `redirect_uris` json NOT NULL,
+  `client_uri` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `logo_uri` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `grant_types` json DEFAULT NULL,
+  `token_endpoint_auth_method` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',
+  `software_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `software_version` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `oauth_clients_client_id_unique` (`client_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `oauth_authorization_codes` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `code_hash` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `user_id` bigint unsigned NOT NULL,
+  `client_id` bigint unsigned NOT NULL,
+  `redirect_uri` varchar(1024) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `scopes` json NOT NULL,
+  `code_challenge` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `code_challenge_method` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `expires_at` timestamp NOT NULL,
+  `used_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `oauth_authorization_codes_code_hash_unique` (`code_hash`),
+  KEY `oauth_authorization_codes_user_id_foreign` (`user_id`),
+  KEY `oauth_authorization_codes_client_id_foreign` (`client_id`),
+  KEY `oauth_authorization_codes_expires_at_index` (`expires_at`),
+  CONSTRAINT `oauth_authorization_codes_client_id_foreign` FOREIGN KEY (`client_id`) REFERENCES `oauth_clients` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `oauth_authorization_codes_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `oauth_access_tokens` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `token_hash` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token_prefix` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `user_id` bigint unsigned NOT NULL,
+  `client_id` bigint unsigned NOT NULL,
+  `scopes` json NOT NULL,
+  `expires_at` timestamp NOT NULL,
+  `revoked_at` timestamp NULL DEFAULT NULL,
+  `last_used_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `oauth_access_tokens_token_hash_unique` (`token_hash`),
+  KEY `oauth_access_tokens_user_id_revoked_at_index` (`user_id`,`revoked_at`),
+  KEY `oauth_access_tokens_client_id_revoked_at_index` (`client_id`,`revoked_at`),
+  CONSTRAINT `oauth_access_tokens_client_id_foreign` FOREIGN KEY (`client_id`) REFERENCES `oauth_clients` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `oauth_access_tokens_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `oauth_refresh_tokens` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `token_hash` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `access_token_id` bigint unsigned NOT NULL,
+  `expires_at` timestamp NOT NULL,
+  `revoked_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `oauth_refresh_tokens_token_hash_unique` (`token_hash`),
+  KEY `oauth_refresh_tokens_access_token_id_foreign` (`access_token_id`),
+  CONSTRAINT `oauth_refresh_tokens_access_token_id_foreign` FOREIGN KEY (`access_token_id`) REFERENCES `oauth_access_tokens` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-SET FOREIGN_KEY_CHECKS = 1;
+

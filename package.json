@@ -1,6 +1,6 @@
 {
   "name": "mcpmeter-proxy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP marketplace metering gateway. Authenticates, rate-limits, debits credit, forwards to upstream MCP servers.",
   "type": "module",
   "main": "index.js",
